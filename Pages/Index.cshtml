@@ -43,7 +43,7 @@ var fileList;
     reader.addEventListener('load', (event) => {
         SignFile(event.target.result);        
     });
-        reader.readAsDataURL(file);
+        reader.readAsArrayBuffer(file);
     }
 </script>
 
@@ -128,7 +128,7 @@ var fileList;
         // Предварительно закодированные в BASE64 бинарные данные
         // В данном случае закодирована строка "Some Data."
         
-        var dataInBase64 = file;//"U29tZSBEYXRhLg==";
+        var dataInBase64 = "U29tZSBEYXRhLg==";//file;//"U29tZSBEYXRhLg==";
 
         // Подписаны будут исходные бинарные данные (в данном случае - "Some Data.")
         // Такая подпись должна проверяться в КриптоАРМ и cryptcp.exe
