@@ -14,57 +14,46 @@
 <input id="CertName" type="text" size="40" value="Дмитрий"/>
 <br/>
 <a href="#" onclick="onSignClicked()">Подписать</a>
+<br />
+<label>Хэш</label>
+<br />
+<textarea id="hash" rows="2" cols="200"></textarea>
 <br/>
 <label>Подпись</label>
 <br/>
-<textarea id="signature" rows="3" cols="200"></textarea>
+<textarea id="signature" rows="20" cols="200"></textarea>
 <br/>
 <a href="#" onclick="onDownloadSignClicked()">Скачать подпись</a>
 
-<script language="javascript" src="~/js/cadesplugin_api.js"></script>
-
-
+<script src="~/js/cadesplugin_api.js"></script>
 
 <script>
-var fileList; 
-  const fileSelector = document.getElementById('file-selector');
-  fileSelector.addEventListener('change', (event) => {
-    fileList = event.target.files;      
-  });
-
-  function readFile(file) {
-    /*// Check if the file is an image.
-    if (file.type && !file.type.startsWith('image/')) {
-        console.log('File is not an image.', file.type, file);
-        return;
-    }*/
-
-    const reader = new FileReader();
-    reader.addEventListener('load', (event) => {
-        SignFile(event.target.result);        
+    var fileList; 
+    const fileSelector = document.getElementById('file-selector');
+    fileSelector.addEventListener('change', (event) => {
+        fileList = event.target.files;      
     });
-        reader.readAsArrayBuffer(file);
-    }
-</script>
 
-<script>
     var CADESCOM_CADES_BES = 1;
     var CAPICOM_CURRENT_USER_STORE = 2;
     var CAPICOM_MY_STORE = "My";
     var CAPICOM_STORE_OPEN_MAXIMUM_ALLOWED = 2;
     var CAPICOM_CERTIFICATE_FIND_SUBJECT_NAME = 1;
     var CADESCOM_BASE64_TO_BINARY = 1;
+    var CADESCOM_HASH_ALGORITHM_CP_GOST_3411 = 100;
+    var CADESCOM_HASH_ALGORITHM_CP_GOST_3411_2012_256 = 101;
+    var CADESCOM_HASH_ALGORITHM_CP_GOST_3411_2012_512 = 102;
 
     function SignCreate(certSubjectName, dataInBase64) {
         return new Promise(function (resolve, reject) {
             cadesplugin.async_spawn(function* (args) {
                 var oStore = yield cadesplugin.CreateObjectAsync("CAdESCOM.Store");
                 yield oStore.Open(CAPICOM_CURRENT_USER_STORE, CAPICOM_MY_STORE,
-                CAPICOM_STORE_OPEN_MAXIMUM_ALLOWED);
+                    CAPICOM_STORE_OPEN_MAXIMUM_ALLOWED);
 
                 var oStoreCerts = yield oStore.Certificates;
                 var oCertificates = yield oStoreCerts.Find(
-                CAPICOM_CERTIFICATE_FIND_SUBJECT_NAME, certSubjectName);
+                    CAPICOM_CERTIFICATE_FIND_SUBJECT_NAME, certSubjectName);
                 var certsCount = yield oCertificates.Count;
                 if (certsCount === 0) {
                     err = "Certificate not found: " + certSubjectName;
@@ -97,6 +86,216 @@ var fileList;
         });
     }
 
+    function SignFileNew(oFile) {
+        cadesplugin.async_spawn(function* (args) {
+            // Проверяем, работает ли File API
+            if (window.FileReader) {
+                // Браузер поддерживает File API.
+            } else {
+                alert('The File APIs are not fully supported in this browser.');
+            }
+            
+            //var oFile = document.getElementById("uploadFile").files[0];
+            var oFReader = new FileReader();
+
+            if (typeof (oFReader.readAsDataURL) != "function") {
+                alert("Method readAsDataURL() is not supported in FileReader.");
+                return;
+            }
+
+            oFReader.readAsDataURL(oFile);
+
+            oFReader.onload = function (oFREvent) {
+                cadesplugin.async_spawn(function* (args) {
+                    var header = ";base64,";
+                    var sFileData = oFREvent.target.result;
+                    var sBase64Data = sFileData.substr(sFileData.indexOf(header) + header.length);
+
+                    var oCertName = document.getElementById("CertName");
+                    var sCertName = oCertName.value; // Здесь следует заполнить SubjectName сертификата
+                    if ("" == sCertName) {
+                        alert("Введите имя сертификата (CN).");
+                        return;
+                    }
+                    var oStore = yield cadesplugin.CreateObjectAsync("CAdESCOM.Store");
+                    yield oStore.Open(CAPICOM_CURRENT_USER_STORE, CAPICOM_MY_STORE,
+                        CAPICOM_STORE_OPEN_MAXIMUM_ALLOWED);
+
+                    var oStoreCerts = yield oStore.Certificates;
+                    var oCertificates = yield oStoreCerts.Find(
+                        CAPICOM_CERTIFICATE_FIND_SUBJECT_NAME, sCertName);
+                    var certsCount = yield oCertificates.Count;
+                    if (certsCount === 0) {
+                        alert("Certificate not found: " + sCertName);
+                        return;
+                    }
+                    var oCertificate = yield oCertificates.Item(1);
+                    var oSigner = yield cadesplugin.CreateObjectAsync("CAdESCOM.CPSigner");
+                    yield oSigner.propset_Certificate(oCertificate);
+                    yield oSigner.propset_CheckCertificate(true);
+
+                    var oSignedData = yield cadesplugin.CreateObjectAsync("CAdESCOM.CadesSignedData");
+                    yield oSignedData.propset_ContentEncoding(CADESCOM_BASE64_TO_BINARY);
+                    yield oSignedData.propset_Content(sBase64Data);
+
+                    try {
+                        var sSignedMessage = yield oSignedData.SignCades(oSigner, CADESCOM_CADES_BES, true);
+                    } catch (err) {
+                        alert("Failed to create signature. Error: " + cadesplugin.getLastError(err));
+                        return;
+                    }
+
+                    yield oStore.Close();
+
+                    // Выводим отделенную подпись в BASE64 на страницу
+                    // Такая подпись должна проверяться в КриптоАРМ и cryptcp.exe
+                    document.getElementById("signature").innerHTML = sSignedMessage;
+
+                    var oSignedData2 = yield cadesplugin.CreateObjectAsync("CAdESCOM.CadesSignedData");
+                    try {
+                        yield oSignedData2.propset_ContentEncoding(CADESCOM_BASE64_TO_BINARY);
+                        yield oSignedData2.propset_Content(sBase64Data);
+                        yield oSignedData2.VerifyCades(sSignedMessage, CADESCOM_CADES_BES, true);
+                        alert("Signature verified");
+                    } catch (err) {
+                        alert("Failed to verify signature. Error: " + cadesplugin.getLastError(err));
+                        return;
+                    }
+                });
+            };
+        });
+    }
+
+    function SignOtdel(dataInBase64) {        
+        cadesplugin.async_spawn(function* (args) {
+            var oCertName = document.getElementById("CertName");
+            var sCertName = oCertName.value; // Здесь следует заполнить SubjectName сертификата
+            if ("" === sCertName) {
+                alert("Введите имя сертификата (CN).");
+                return;
+            }
+            // Ищем сертификат для подписи
+            var oStore = yield cadesplugin.CreateObjectAsync("CAdESCOM.Store");
+            yield oStore.Open(CAPICOM_CURRENT_USER_STORE, CAPICOM_MY_STORE,
+                CAPICOM_STORE_OPEN_MAXIMUM_ALLOWED);
+
+            var oStoreCerts = yield oStore.Certificates;
+            var oCertificates = yield oStoreCerts.Find(
+                CAPICOM_CERTIFICATE_FIND_SUBJECT_NAME, sCertName);
+            var certsCount = yield oCertificates.Count;
+            if (certsCount === 0) {
+                alert("Certificate not found: " + sCertName);
+                return;
+            }
+            var oCertificate = yield oCertificates.Item(1);
+            yield oStore.Close();
+
+            //****************** */
+            
+            // Алгоритм хэширования, при помощи которого было вычислено хэш-значение
+            // Полный список поддерживаемых алгоритмов указан в перечислении CADESCOM_HASH_ALGORITHM
+            var hashAlg = CADESCOM_HASH_ALGORITHM_CP_GOST_3411_2012_512; // ГОСТ Р 34.11-94
+
+            // Создаем объект CAdESCOM.HashedData
+            var oHashedData1 = yield cadesplugin.CreateObjectAsync("CAdESCOM.HashedData");            
+
+            // Алгоритм хэширования нужно указать до того, как будут переданы данные
+            yield oHashedData1.propset_Algorithm(hashAlg);
+            yield oHashedData1.propset_DataEncoding(CADESCOM_BASE64_TO_BINARY);
+
+            // Передаем данные
+            yield oHashedData1.Hash(dataInBase64);
+
+            // Вычисляем хэш-значение
+            var sHashValue1 = yield oHashedData1.Value;        
+            document.getElementById("hash").innerHTML = sHashValue1;
+
+            //****************** */
+
+            // Предварительно вычисленное хэш-значение исходных данных
+            // Хэш-значение должно быть представлено в виде строки шестнадцатеричных цифр,
+            // группами по 2 цифры на байт, с пробелами или без пробелов.
+            // Например, хэш-значение в таком формате возвращают объекты
+            // CAPICOM.HashedData и CADESCOM.HashedData.
+            var sHashValue = sHashValue1; //"92CD0CB36B10BFB88DEF198F80B7D2E667DBDA064D346405C25EEF77FFE375D7";
+
+            
+
+            // Создаем объект CAdESCOM.HashedData
+            var oHashedData = yield cadesplugin.CreateObjectAsync("CAdESCOM.HashedData");
+
+            // Инициализируем объект заранее вычисленным хэш-значением
+            // Алгоритм хэширования нужно указать до того, как будет передано хэш-значение
+            yield oHashedData.propset_Algorithm(hashAlg);
+            yield oHashedData.SetHashValue(sHashValue);
+
+            // Создаем подписанное сообщение
+            // Такая подпись должна проверяться в КриптоАРМ и cryptcp.exe
+            // Создаем объект CAdESCOM.CPSigner
+            var oSigner = yield cadesplugin.CreateObjectAsync("CAdESCOM.CPSigner");
+            yield oSigner.propset_Certificate(oCertificate);
+            yield oSigner.propset_CheckCertificate(true);
+
+            // Создаем объект CAdESCOM.CadesSignedData
+            var oSignedData = yield cadesplugin.CreateObjectAsync("CAdESCOM.CadesSignedData");
+
+            var sSignedMessage = "";
+
+            // Вычисляем значение подписи
+            try {
+                sSignedMessage = yield oSignedData.SignHash(oHashedData, oSigner, CADESCOM_CADES_BES);
+            } catch (err) {
+                alert("Failed to create signature. Error: " + cadesplugin.getLastError(err));
+                return;
+            }
+
+            document.getElementById("signature").innerHTML = sSignedMessage;
+
+            // Создаем объект CAdESCOM.CadesSignedData
+            var oSignedData2 = yield cadesplugin.CreateObjectAsync("CAdESCOM.CadesSignedData");
+
+            // Проверяем подпись
+            try {
+                yield oSignedData2.VerifyHash(oHashedData, sSignedMessage, CADESCOM_CADES_BES);
+                alert("Signature verified");
+            } catch (err) {
+                alert("Failed to verify signature. Error: " + cadesplugin.getLastError(err));
+                return;
+            }
+        });
+    }
+
+    function GetHash(dataInBase64) {
+        return new Promise(function (resolve, reject) {
+            cadesplugin.async_spawn(function* (args) {
+                // Создаем объект CAdESCOM.HashedData
+                var oHashedData = yield cadesplugin.CreateObjectAsync("CAdESCOM.HashedData");
+
+                // Алгоритм хэширования нужно указать до того, как будут переданы данные
+                yield oHashedData.propset_Algorithm(CADESCOM_HASH_ALGORITHM_CP_GOST_3411);
+
+                // Указываем кодировку данных
+                // Кодировка должна быть указана до того, как будут переданы сами данные
+                yield oHashedData.propset_DataEncoding(CADESCOM_BASE64_TO_BINARY);
+
+                // Предварительно закодированные в BASE64 бинарные данные
+                // В данном случае закодирован файл со строкой "Some Data."
+                //var dataInBase64 = "U29tZSBEYXRhLg==";
+
+                // Передаем данные
+                yield oHashedData.Hash(dataInBase64);
+
+                // Получаем хэш-значение
+                var sHashValue = yield oHashedData.Value;
+                // Это значение будет совпадать с вычисленным при помощи, например,
+                // утилиты cryptcp от тех же исходных _бинарных_ данных.
+                // В данном случае - от файла со строкой "Some Data."
+
+                return args[0](sHashValue);
+            }, resolve, reject);
+        });
+    }
+
     function Verify(sSignedMessage, dataInBase64) {
         return new Promise(function (resolve, reject) {
             cadesplugin.async_spawn(function* (args) {
@@ -107,7 +306,7 @@ var fileList;
                     yield oSignedData.propset_ContentEncoding(CADESCOM_BASE64_TO_BINARY);
                     yield oSignedData.propset_Content(dataInBase64);
                     yield oSignedData.VerifyCades(sSignedMessage, CADESCOM_CADES_BES, true);
-                } 
+                }
                 catch (err) {
                     var e = cadesplugin.getLastError(err);
                     alert("Failed to verify signature. Error: " + e);
@@ -118,6 +317,23 @@ var fileList;
         });
     }
 
+    function readFile(file) {
+        /*// Check if the file is an image.
+        if (file.type && !file.type.startsWith('image/')) {
+        console.log('File is not an image.', file.type, file);
+        return;
+        }*/
+
+        const reader = new FileReader();
+        reader.addEventListener('load', (event) => {
+            SignOtdel(event.target.result);
+            //SignFile(event.target.result);
+        });
+        reader.readAsDataURL(file);
+    }
+
+    
+
     function SignFile(file) {
         var oCertName = document.getElementById("CertName");
         var sCertName = oCertName.value; // Здесь следует заполнить SubjectName сертификата
@@ -127,82 +343,90 @@ var fileList;
         }
         // Предварительно закодированные в BASE64 бинарные данные
         // В данном случае закодирована строка "Some Data."
-        
-        var dataInBase64 = "U29tZSBEYXRhLg==";//file;//"U29tZSBEYXRhLg==";
+
+        GetHash("U29tZSBEYXRhLg==").then(
+            function (dataInBase64) {
+                document.getElementById("hash").innerHTML = dataInBase64;
+                SignCreate(sCertName, dataInBase64).then(
+                    function (signedMessage) {
+                        document.getElementById("signature").innerHTML = signedMessage;
+                        Verify(signedMessage, dataInBase64).then(
+                            function () {
+                                alert("Signature verified");
+                            },
+                            function (err) {
+                                document.getElementById("signature").innerHTML = err;
+                            });
+                    },
+                    function (err) {
+                        document.getElementById("signature").innerHTML = err;
+                    }
+                );
+            },
+            function (err) {                
+                //alert("Error in function GetHash!");
+                document.getElementById("signature").innerHTML = err;
+            });//"U29tZSBEYXRhLg==";//file;//"U29tZSBEYXRhLg==";
 
         // Подписаны будут исходные бинарные данные (в данном случае - "Some Data.")
         // Такая подпись должна проверяться в КриптоАРМ и cryptcp.exe
 
-        SignCreate(sCertName, dataInBase64).then(
-            function (signedMessage) {
-                document.getElementById("signature").innerHTML = signedMessage;
-                Verify(signedMessage, dataInBase64).then(
-                    function () {
-                        alert("Signature verified");
-                    },
-                    function (err) {
-                        document.getElementById("signature").innerHTML = err;
-                    });
-            },
-            function (err) {
-                document.getElementById("signature").innerHTML = err;
-            }
-        );
+        
     }
 
-    function onSignClicked() 
-    {
-        readFile(fileList[0]);
+    function onSignClicked() {  
+        SignFileNew(fileList[0]);
+        //readFile(fileList[0]);
     }
 
-    function onDownloadSignClicked() 
-    {
+    function onDownloadSignClicked() {
         var sign = document.getElementById("signature").innerHTML;
-        download(sign, "Test.sgn", "text/plain");
+        download(sign, "test.pdf.sig", "text/plain");
     }
-    
+
     function download(strData, strFileName, strMimeType) {
-    var D = document,
-        A = arguments,
-        a = D.createElement("a"),
-        d = A[0],
-        n = A[1],
-        t = A[2] || "text/plain";
+        var D = document,
+            A = arguments,
+            a = D.createElement("a"),
+            d = A[0],
+            n = A[1],
+            t = A[2] || "text/plain";
 
-    //build download link:
-    a.href = "data:" + strMimeType + "charset=utf-8," + escape(strData);
-
-
-    if (window.MSBlobBuilder) { // IE10
-        var bb = new MSBlobBuilder();
-        bb.append(strData);
-        return navigator.msSaveBlob(bb, strFileName);
-    } /* end if(window.MSBlobBuilder) */
+        //build download link:
+        a.href = "data:" + strMimeType + "charset=utf-8," + escape(strData);
 
 
+        if (window.MSBlobBuilder) { // IE10
+            var bb = new MSBlobBuilder();
+            bb.append(strData);
+            return navigator.msSaveBlob(bb, strFileName);
+        } /* end if(window.MSBlobBuilder) */
 
-    if ('download' in a) { //FF20, CH19
-        a.setAttribute("download", n);
-        a.innerHTML = "downloading...";
-        D.body.appendChild(a);
-        setTimeout(function() {
-            var e = D.createEvent("MouseEvents");
-            e.initMouseEvent("click", true, false, window, 0, 0, 0, 0, 0, false, false, false, false, 0, null);
-            a.dispatchEvent(e);
-            D.body.removeChild(a);
-        }, 66);
+
+
+        if ('download' in a) { //FF20, CH19
+            a.setAttribute("download", n);
+            a.innerHTML = "downloading...";
+            D.body.appendChild(a);
+            setTimeout(function () {
+                var e = D.createEvent("MouseEvents");
+                e.initMouseEvent("click", true, false, window, 0, 0, 0, 0, 0, false, false, false, false, 0, null);
+                a.dispatchEvent(e);
+                D.body.removeChild(a);
+            }, 66);
+            return true;
+        }; /* end if('download' in a) */
+
+
+
+        //do iframe dataURL download: (older W3)
+        var f = D.createElement("iframe");
+        D.body.appendChild(f);
+        f.src = "data:" + (A[2] ? A[2] : "application/octet-stream") + (window.btoa ? ";base64" : "") + "," + (window.btoa ? window.btoa : escape)(strData);
+        setTimeout(function () {
+            D.body.removeChild(f);
+        }, 333);
         return true;
-    }; /* end if('download' in a) */
+    }
 
-
-
-    //do iframe dataURL download: (older W3)
-    var f = D.createElement("iframe");
-    D.body.appendChild(f);
-    f.src = "data:" + (A[2] ? A[2] : "application/octet-stream") + (window.btoa ? ";base64" : "") + "," + (window.btoa ? window.btoa : escape)(strData);
-    setTimeout(function() {
-        D.body.removeChild(f);
-    }, 333);
-    return true;
-}
 </script>
